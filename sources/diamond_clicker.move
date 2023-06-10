@@ -33,7 +33,7 @@ module diamond_clicker::game {
     */
     struct Upgrade has key, store, copy {
         name: vector<u8>,
-        amount: u64
+        amount: u64,
     }
 
     struct GameStore has key {
@@ -59,20 +59,23 @@ module diamond_clicker::game {
         let account_address = signer::address_of(account);
         if (!exists<GameStore>(account_address)) {
             initialize_game(account);
-        }
+        };
         let game_store = borrow_global_mut<GameStore>(account_address);
-        game_store.diamonds += 1;
+        game_store.diamonds = game_store.diamonds + 1;
     }
 
     fun get_unclaimed_diamonds(account_address: address, current_timestamp_seconds: u64): u64 acquires GameStore {
         let game_store = borrow_global<GameStore>(account_address);
         let minutes_elapsed = (current_timestamp_seconds - game_store.last_claimed_timestamp_seconds) / 60;
-        let mut unclaimed_diamonds = 0;
-        for upgrade in &game_store.upgrades {
+        let unclaimed_diamonds = 0;
+        let i = 0;
+        while (i < Vector::length(&game_store.upgrades)) {
+            let upgrade = *Vector::borrow(&game_store.upgrades, i);
             let upgrade_index = get_upgrade_index(upgrade.name);
             let dpm = POWERUP_VALUES[upgrade_index][1];
-            unclaimed_diamonds += dpm * upgrade.amount * minutes_elapsed;
-        }
+            unclaimed_diamonds = unclaimed_diamonds + dpm * upgrade.amount * minutes_elapsed;
+            i = i + 1;
+        };
         unclaimed_diamonds
     }
 
@@ -80,91 +83,66 @@ module diamond_clicker::game {
         let game_store = borrow_global_mut<GameStore>(account_address);
         let current_timestamp_seconds = timestamp::now_seconds();
         let unclaimed_diamonds = get_unclaimed_diamonds(account_address, current_timestamp_seconds);
-        game_store.diamonds += unclaimed_diamonds;
+        game_store.diamonds = game_store.diamonds + unclaimed_diamonds;
         game_store.last_claimed_timestamp_seconds = current_timestamp_seconds;
     }
 
     public entry fun upgrade(account: &signer, upgrade_index: u64, upgrade_amount: u64) acquires GameStore {
         let account_address = signer::address_of(account);
         assert(exists<GameStore>(account_address), ERROR_GAME_STORE_DOES_NOT_EXIST);
-        assert(upgrade_index < POWERUP_NAMES.length(), ERROR_UPGRADE_DOES_NOT_EXIST);
+        assert(upgrade_index < POWERUP_NAMES.length, ERROR_UPGRADE_DOES_NOT_EXIST);
 
         claim(account_address);
 
         let game_store = borrow_global_mut<GameStore>(account_address);
         let upgrade_cost = POWERUP_VALUES[upgrade_index][0];
         let total_upgrade_cost = upgrade_cost * upgrade_amount;
+
         assert(game_store.diamonds >= total_upgrade_cost, ERROR_NOT_ENOUGH_DIAMONDS_TO_UPGRADE);
 
-        let mut upgrade_existed = false;
-        for upgrade in &mut game_store.upgrades {
-            if (upgrade.name == POWERUP_NAMES[upgrade_index]) {
-                upgrade.amount += upgrade_amount;
-                upgrade_existed = true;
-                break;
-            }
-        }
-        
-        if (!upgrade_existed) {
-            let new_upgrade = Upgrade {
-                name: POWERUP_NAMES[upgrade_index],
-                amount: upgrade_amount,
-            };
-            vector::push_back(&mut game_store.upgrades, new_upgrade);
-        }
+        game_store.diamonds = game_store.diamonds - total_upgrade_cost;
+        let upgrade_name = POWERUP_NAMES[upgrade_index].clone;
+        let upgrade = Upgrade {
+            name: upgrade_name,
+            amount: upgrade_amount,
+        };
 
-        game_store.diamonds -= total_upgrade_cost;
+        let upgrade_index = get_upgrade_index(upgrade.name);
+        if (upgrade_index < game_store.upgrades.len) {
+            let existing_upgrade = &mut game_store.upgrades[upgrade_index];
+            existing_upgrade.amount = existing_upgrade.amount + upgrade.amount;
+        } else {
+            Vector::push_back(&mut game_store.upgrades, upgrade);
+        }
     }
 
-     #[view]
-     public fun get_diamonds(account_address: address): u64 acquires GameStore {
-         assert(exists<GameStore>(account_address), ERROR_GAME_STORE_DOES_NOT_EXIST);
-         let game_store = borrow_global<GameStore>(account_address);
-         let current_timestamp_seconds = timestamp::now_seconds();
-         let unclaimed_diamonds = get_unclaimed_diamonds(account_address, current_timestamp_seconds);
-         game_store.diamonds + unclaimed_diamonds
-     }
+    public fun get_diamonds(account_address: address): u64 acquires GameStore {
+        let game_store = borrow_global<GameStore>(account_address);
+        game_store.diamonds
+    }
 
-     #[view]
-     public fun get_diamonds_per_minute(account_address: address): u64 acquires GameStore {
-         assert(exists<GameStore>(account_address), ERROR_GAME_STORE_DOES_NOT_EXIST);
-         let game_store = borrow_global<GameStore>(account_address);
-         let mut diamonds_per_minute = 0;
-         for upgrade in &game_store.upgrades {
-             let upgrade_index = get_upgrade_index(upgrade.name);
-             let dpm = POWERUP_VALUES[upgrade_index][1];
-             diamonds_per_minute += dpm * upgrade.amount;
-         }
-         diamonds_per_minute
-     }
-
-     #[view]
-     public fun get_powerups(account_address: address): vector<Upgrade> acquires GameStore {
-         assert(exists<GameStore>(account_address), ERROR_GAME_STORE_DOES_NOT_EXIST);
-         let game_store = borrow_global<GameStore>(account_address);
-         game_store.upgrades
-     }
-
-    /*
-    Helper Functions
-    */
+    public fun get_upgrades(account_address: address): vector<Upgrade> acquires GameStore {
+        let game_store = borrow_global<GameStore>(account_address);
+        game_store.upgrades
+    }
 
     fun get_upgrade_index(upgrade_name: vector<u8>): u64 {
-        let mut index = 0;
-        while (index < POWERUP_NAMES.length()) {
-            if (POWERUP_NAMES[index] == upgrade_name) {
-                return index;
+        let i = 0;
+        while (i < Vector::length(&POWERUP_NAMES)) {
+            let name = *Vector::borrow(&POWERUP_NAMES, i);
+            if (name == upgrade_name) {
+                return i;
             }
-            index += 1;
+            i = i + 1;
         }
-        abort(ERROR_UPGRADE_DOES_NOT_EXIST)
+        Vector::length(&POWERUP_NAMES)
     }
 
-        /*
+    /*
     Tests
     DO NOT EDIT
     */
-    inline fun test_click_loop(signer: &signer, amount: u64) acquires GameStore {
+    fun test_click_loop(signer: &signer, amount: u64) acquires GameStore {
         let i = 0;
         while (amount > i) {
             click(signer);
