@@ -132,8 +132,6 @@ module diamond_clicker::game {
         });
     }
 
-    // ...
-
     #[view]
     public fun get_diamonds(account_address: address): u64 acquires GameStore {
         // return game_store.diamonds + unclaimed_diamonds
